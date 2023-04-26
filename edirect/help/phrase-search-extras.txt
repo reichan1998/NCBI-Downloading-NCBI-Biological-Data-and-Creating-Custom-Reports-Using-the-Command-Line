@@ -1,0 +1,383 @@
+LOAD THEME CONVERSION SHORTCUTS
+
+  source theme-aliases
+
+IDENTIFIER CONVERSION
+
+  {Chem|Disz|Gene|Mesh}{Code|Desc|Name|Tree}To{Code|Desc|Name|Tree}
+
+THEME-BASED NAVIGATION
+
+  {Chem|Disz|Gene}To{Chem|Disz|Gene}
+
+THEME EXAMPLES
+
+  ChemNameToCode dapsone
+
+  echo dapsone | ChemNameToCode
+
+  echo "familial mediterranean fever" |
+  DiszNameToCode |
+  DiszToGene |
+  GeneToDisz |
+  DiszToChem |
+  ChemCodeToName |
+  sort -f | uniq -i
+
+  echo "sarcoidosis" |
+  DiszNameToCode |
+  DiszToChem |
+  ChemToDisz |
+  DiszToChem |
+  ChemCodeToName |
+  sort -f | uniq -i
+
+  echo "wilms tumor" |
+  DiszNameToCode |
+  DiszToGene |
+  GeneToGene |
+  GeneToChem |
+  ChemCodeToName |
+  sort -f | uniq -i
+
+AUTOMATION
+
+  ascend_mesh_tree() {
+    var="${1%\*}"
+    while :
+    do
+      frst=$( phrase-search -count "$var* [TREE]" )
+      scnd=$( cat $EDIRECT_PUBMED_MASTER/Data/meshconv.xml |
+              xtract -pattern Rec -if Tree -equals "$var" -first Code Name )
+      printf "${frst}\t${scnd}\n"
+      case "$var" in
+        *.* ) var="${var%????}" ;;
+        *   ) break             ;;
+      esac
+    done |
+    align-columns -g 4
+  }
+
+  ascend_mesh_tree "C01.925.782.417.415"
+
+
+  for thm in A+ A- B C D E E+ E- G H I J K L Md Mp N O Pa Pr Q Rg Sa T Te U Ud V+ W X Y Z
+  do
+    num=$(phrase-search -query "$thm [THME]" | wc -l)
+    echo -e "$thm\t$num"
+  done
+
+
+  declare -a THEMES
+  THEMES=( A+ A- B Bc Bg C D E E+ E- Ec Ec+ Ec- \
+           Eg Eg+ G H I J Jc Jg K L Md Mp N O Pa \
+           Pr Q Rg Sa T Te U Ud V+ W X Y Z )
+  declare -a REMAINS
+  REMAINS=("${THEMES[@]:1}")
+
+  for fst in ${THEMES[@]}
+  do
+    num=$(phrase-search -query "$fst [THME]" | wc -l)
+    echo -e "$fst\t \t$num"
+    for scd in ${REMAINS[@]}
+    do
+      num=$(phrase-search -query "$fst [THME] AND $scd [THME]" | wc -l)
+      echo -e "$fst\t$scd\t$num"
+      echo -e "$scd\t$fst\t$num"
+    done
+    REMAINS=("${REMAINS[@]:1}")
+  done | sort | expand -t 7,13
+
+
+  cat meshconv.xml |
+  xtract -pattern Rec -if "%Tree" -eq 3 -sep " - " -tab "\n" -element Tree,Name |
+  sort
+
+ENTREZ INTEGRATION
+
+  esearch -db pubmed -query "complement system proteins [MESH]" |
+  efetch -format uid |
+  phrase-search -filter "L [THME] AND D10* [TREE]"
+
+MEDICAL SUBJECT HEADING CODE VIEWERS
+
+  https://meshb.nlm.nih.gov/treeView
+  https://meshb-prev.nlm.nih.gov/treeView
+
+MESH CATEGORIES IN TREE INDEX
+
+  A - Anatomy
+  C - Diseases
+  D - Chemicals and Drugs
+  E - Analytical, Diagnostic and Therapeutic Techniques, and Equipment
+  F - Psychiatry and Psychology
+  G - Phenomena and Processes
+  Z - Geographicals
+
+UNINDEXED MESH CATEGORIES
+
+  B - Organisms
+  H - Disciplines and Occupations
+  I - Anthropology, Education, Sociology, and Social Phenomena
+  J - Technology, Industry, and Agriculture
+  K - Humanities
+  L - Information Science
+  M - Named Groups
+  N - Health Care
+  V - Publication Characteristics
+
+INDEXED MESH CODES
+
+  A01 - Body Regions
+  A02 - Musculoskeletal System
+  A03 - Digestive System
+  A04 - Respiratory System
+  A05 - Urogenital System
+  A06 - Endocrine System
+  A07 - Cardiovascular System
+  A08 - Nervous System
+  A09 - Sense Organs
+  A10 - Tissues
+  A11 - Cells
+  A12 - Fluids and Secretions
+  A13 - Animal Structures
+  A14 - Stomatognathic System
+  A15 - Hemic and Immune Systems
+  A16 - Embryonic Structures
+  A17 - Integumentary System
+  A18 - Plant Structures
+  A19 - Fungal Structures
+  A20 - Bacterial Structures
+  A21 - Viral Structures
+
+  C01 - Infections
+  C04 - Neoplasms
+  C05 - Musculoskeletal Diseases
+  C06 - Digestive System Diseases
+  C07 - Stomatognathic Diseases
+  C08 - Respiratory Tract Diseases
+  C09 - Otorhinolaryngologic Diseases
+  C10 - Nervous System Diseases
+  C11 - Eye Diseases
+  C12 - Male Urogenital Diseases
+  C13 - Female Urogenital Diseases and Pregnancy Complications
+  C14 - Cardiovascular Diseases
+  C15 - Hemic and Lymphatic Diseases
+  C16 - Congenital, Hereditary, and Neonatal Diseases and Abnormalities
+  C17 - Skin and Connective Tissue Diseases
+  C18 - Nutritional and Metabolic Diseases
+  C19 - Endocrine System Diseases
+  C20 - Immune System Diseases
+  C21 - Disorders of Environmental Origin
+  C22 - Animal Diseases
+  C23 - Pathological Conditions, Signs and Symptoms
+  C24 - Occupational Diseases
+  C25 - Chemically-Induced Disorders
+  C26 - Wounds and Injuries
+
+  D01 - Inorganic Chemicals
+  D02 - Organic Chemicals
+  D03 - Heterocyclic Compounds
+  D04 - Polycyclic Compounds
+  D05 - Macromolecular Substances
+  D08 - Enzymes and Coenzymes
+  D09 - Carbohydrates
+  D10 - Lipids
+  D12 - Amino Acids, Peptides, and Proteins
+  D13 - Nucleic Acids, Nucleotides, and Nucleosides
+  D20 - Complex Mixtures
+  D23 - Biological Factors
+  D26 - Pharmaceutical Preparations
+  D27 - Chemical Actions and Uses
+
+  E01 - Diagnosis
+  E02 - Therapeutics
+  E03 - Anesthesia and Analgesia
+  E04 - Surgical Procedures, Operative
+  E05 - Investigative Techniques
+  E07 - Equipment and Supplies
+
+  F01 - Behavior and Behavior Mechanisms
+  F02 - Psychological Phenomena
+  F03 - Mental Disorders
+  F04 - Behavioral Disciplines and Activities
+
+  G01 - Physical Phenomena
+  G02 - Chemical Phenomena
+  G03 - Metabolism
+  G04 - Cell Physiological Phenomena
+  G05 - Genetic Phenomena
+  G06 - Microbiological Phenomena
+  G07 - Physiological Phenomena
+  G08 - Reproductive and Urinary Physiological Phenomena
+  G09 - Circulatory and Respiratory Physiological Phenomena
+  G10 - Digestive System and Oral Physiological Phenomena
+  G11 - Musculoskeletal and Neural Physiological Phenomena
+  G12 - Immune System Phenomena
+  G13 - Integumentary System Physiological Phenomena
+  G14 - Ocular Physiological Phenomena
+  G15 - Plant Physiological Phenomena
+  G16 - Biological Phenomena
+  G17 - Mathematical Concepts
+
+  Z01 - Geographic Locations
+
+MESH SUBHEADINGS
+
+  abnormalities
+  administration & dosage
+  adverse effects
+  agonists
+  analogs & derivatives
+  analysis
+  anatomy & histology
+  antagonists & inhibitors
+  biosynthesis
+  blood
+  blood supply
+  cerebrospinal fluid
+  chemical synthesis
+  chemically induced
+  chemistry
+  classification
+  complications
+  congenital
+  cytology
+  deficiency
+  diagnosis
+  diagnostic imaging
+  diet therapy
+  drug effects
+  drug therapy
+  economics
+  education
+  embryology
+  enzymology
+  epidemiology
+  ethics
+  ethnology
+  etiology
+  genetics
+  growth & development
+  history
+  immunology
+  injuries
+  innervation
+  instrumentation
+  isolation & purification
+  legislation & jurisprudence
+  manpower
+  metabolism
+  methods
+  microbiology
+  mortality
+  nursing
+  organization & administration
+  parasitology
+  pathogenicity
+  pathology
+  pharmacokinetics
+  pharmacology
+  physiology
+  physiopathology
+  poisoning
+  prevention & control
+  psychology
+  radiation effects
+  radiotherapy
+  rehabilitation
+  secondary
+  secretion
+  standards
+  statistics & numerical data
+  supply & distribution
+  surgery
+  therapeutic use
+  therapy
+  toxicity
+  transmission
+  transplantation
+  trends
+  ultrastructure
+  urine
+  utilization
+  veterinary
+  virology
+
+THEME CODES:
+
+Chemical-Gene
+
+  A+    agonism, activation
+  A-    antagonism, blocking
+  Bc    binding, ligand (especially receptors)
+  Ec+   increases expression/production
+  Ec-   decreases expression/production
+  Ec    affects expression/production (neutral)
+  N     inhibits
+
+Gene-Chemical
+
+  O     transport, channels
+  K     metabolism, pharmacokinetics
+  Z     enzyme activity
+
+Chemical-Disease
+
+  T     treatment/therapy (including investigatory)
+  C     inhibits cell growth (especially cancers)
+  Sa    side effect/adverse event
+  Pr    prevents, suppresses
+  Pa    alleviates, reduces
+  Jc    role in disease pathogenesis
+
+Disease-Chemical
+
+  Mp    biomarkers (of disease progression)
+
+Gene-Disease
+
+  U     causal mutations
+  Ud    mutations affecting disease course
+  D     drug targets
+  Jg    role in pathogenesis
+  Te    possible therapeutic effect
+  Y     polymorphisms alter risk
+  G     promotes progression
+
+Disease-Gene
+
+  Md    biomarkers (diagnostic)
+  X     overexpression in disease
+  L     improper regulation linked to disease
+
+Gene-Gene
+
+  Bg    binding, ligand (especially receptors)
+  W     enhances response
+  V+    activates, stimulates
+  Eg+   increases expression/production
+  Eg    affects expression/production (neutral)
+  I     signaling pathway
+  H     same protein or complex
+  Rg    regulation
+  Q     production by cell population
+
+THEME TABLE:
+
+  A+    Agonism, activation                      N     Inhibits
+  A-    Antagonism, blocking                     O     Transport, channels
+  B     Binding, ligand                          Pa    Alleviates, reduces
+  C     Inhibits cell growth                     Pr    Prevents, suppresses
+  D     Drug targets                             Q     Production by cell population
+  E     Affects expression/production            Rg    Regulation
+  E+    Increases expression/production          Sa    Side effect/adverse event
+  E-    Decreases expression/production          T     Treatment/therapy
+  G     Promotes progression                     Te    Possible therapeutic effect
+  H     Same protein or complex                  U     Causal mutations
+  I     Signaling pathway                        Ud    Mutations affecting disease course
+  J     Role in disease pathogenesis             V+    Activates, stimulates
+  K     Metabolism, pharmacokinetics             W     Enhances response
+  L     Improper regulation linked to disease    X     Overexpression in disease
+  Md    Biomarkers (diagnostic)                  Y     Polymorphisms alter risk
+  Mp    Biomarkers (progression)                 Z     Enzyme activity

@@ -1,0 +1,51 @@
+EXAMPLES
+
+  phrase-search -fields
+
+  phrase-search -terms TIAB
+
+  phrase-search -count "catabolite repress*"
+
+  phrase-search -counts "catabolite repress*"
+
+  phrase-search -query "(literacy AND numeracy) NOT (adolescent OR child)"
+
+  phrase-search -query "selective serotonin reuptake inhibit*"
+
+  phrase-search -query "vitamin c + + common cold"
+
+  phrase-search -query "vitamin c ~ ~ common cold"
+
+  phrase-search -query "C14.907.617.812* [TREE] AND 2015:2018 [YEAR]"
+
+  phrase-search -title "Genetic Control of Biochemical Reactions in Neurospora."
+
+  phrase-search -search "Cozzarelli NR [AUTH]" |
+  phrase-search -link CITED
+
+  phrase-search -pairs "Nucleotide sequences required for Tn3 transposition immunity" |
+  filter-columns '$1 >= 4' | cut -f 2 |
+  efetch -db pubmed -format abstract
+
+  phrase-search -totals YEAR |
+  print-columns '$2, $1, total += $1' | tee /dev/tty |
+  print-columns '$1, log($2)/log(10), log($3)/log(10)' |
+  xy-plot annual-and-cumulative.png
+
+  ascend_mesh_tree() {
+    var="${1%\*}"
+    while :
+    do
+      frst=$( phrase-search -count "$var* [TREE]" )
+      scnd=$( cat $EDIRECT_PUBMED_MASTER/Data/meshconv.xml |
+              xtract -pattern Rec -if Tree -equals "$var" -first Code Name )
+      printf "${frst}\t${scnd}\n"
+      case "$var" in
+        *.* ) var="${var%????}" ;;
+        *   ) break             ;;
+      esac
+    done |
+    align-columns -g 4
+  }
+
+  ascend_mesh_tree "C01.925.782.417.415"

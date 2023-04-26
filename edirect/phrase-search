@@ -1,0 +1,518 @@
+#!/bin/bash
+
+# ===========================================================================
+#
+#                            PUBLIC DOMAIN NOTICE
+#            National Center for Biotechnology Information (NCBI)
+#
+#  This software/database is a "United States Government Work" under the
+#  terms of the United States Copyright Act.  It was written as part of
+#  the author's official duties as a United States Government employee and
+#  thus cannot be copyrighted.  This software/database is freely available
+#  to the public for use. The National Library of Medicine and the U.S.
+#  Government do not place any restriction on its use or reproduction.
+#  We would, however, appreciate having the NCBI and the author cited in
+#  any work or product based on this material.
+#
+#  Although all reasonable efforts have been taken to ensure the accuracy
+#  and reliability of the software and data, the NLM and the U.S.
+#  Government do not and cannot warrant the performance or results that
+#  may be obtained by using this software or data. The NLM and the U.S.
+#  Government disclaim all warranties, express or implied, including
+#  warranties of performance, merchantability or fitness for any particular
+#  purpose.
+#
+# ===========================================================================
+#
+# File Name:  phrase-search
+#
+# Author:  Jonathan Kans
+#
+# Version Creation Date:   10/25/18
+#
+# ==========================================================================
+
+pth=$( dirname "$0" )
+
+case "$pth" in
+  /* )
+    ;; # already absolute
+  *  )
+    pth=$(cd "$pth" && pwd)
+    ;;
+esac
+
+case ":$PATH:" in
+  *:"$pth":* )
+    ;;
+  * )
+    PATH="$PATH:$pth"
+    export PATH
+    ;;
+esac
+
+dbase=""
+target=""
+field=""
+debug=false
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    -version )
+      version=$( einfo -version )
+      echo "$version"
+      exit 0
+      ;;
+    -h | -help | --help | help )
+      version=$( einfo -version )
+      echo "phrase-search $version"
+      echo ""
+      echo "USAGE: phrase-search"
+      echo "       [-path path_to_pubmed_master]"
+      echo "       -count | -counts | -query | -filter | -link | -exact | -title | -words | -pairs | -fields | -terms | -totals"
+      echo "       query arguments"
+      echo ""
+      cat "$pth/help/phrase-search-help.txt"
+      echo ""
+      exit 0
+      ;;
+    -extras )
+      version=$( einfo -version )
+      echo "phrase-search $version"
+      echo ""
+      cat "$pth/help/phrase-search-extras.txt"
+      echo ""
+      exit 0
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    -debug )
+      debug=true
+      shift
+      ;;
+    -path | -master )
+      target=$2
+      shift
+      shift
+      ;;
+    -db )
+      dbase=$2
+      shift
+      shift
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+if [ -n "$dbase" ] && [ "$dbase" = "pmc" ]
+then
+  if [ -z "${EDIRECT_PMC_MASTER}" ]
+  then
+    echo "ERROR: Must supply path to postings files or set EDIRECT_PMC_MASTER environment variable" >&2
+    exit 1
+  else
+    MASTER="${EDIRECT_PMC_MASTER}"
+    MASTER=${MASTER%/}
+    target="$MASTER/Postings"
+  fi
+fi
+
+if [ -n "$dbase" ] && [ "$dbase" = "taxonomy" ]
+then
+  if [ -z "${EDIRECT_TAXONOMY_MASTER}" ]
+  then
+    echo "ERROR: Must supply path to postings files or set EDIRECT_TAXONOMY_MASTER environment variable" >&2
+    exit 1
+  else
+    MASTER="${EDIRECT_TAXONOMY_MASTER}"
+    MASTER=${MASTER%/}
+    target="$MASTER/Postings"
+  fi
+fi
+
+if [ -z "$target" ]
+then
+  if [ -z "${EDIRECT_PUBMED_MASTER}" ]
+  then
+    echo "ERROR: Must supply path to postings files or set EDIRECT_PUBMED_MASTER environment variable" >&2
+    exit 1
+  else
+    MASTER="${EDIRECT_PUBMED_MASTER}"
+    MASTER=${MASTER%/}
+    target="$MASTER/Postings"
+  fi
+else
+  argument="$target"
+  target=$(cd "$argument" && pwd)
+  target=${target%/}
+  case "$target" in
+    */Postings ) ;;
+    * ) target=$target/Postings ;;
+  esac
+fi
+
+osname=$( uname -s | sed -e 's/_NT-.*$/_NT/; s/^MINGW[0-9]*/CYGWIN/' )
+if [ "$osname" = "CYGWIN_NT" -a -x /bin/cygpath ]
+then
+  target=$( cygpath -w "$target" )
+fi
+
+target=${target%/}
+
+if [ "$debug" = true ]
+then
+  echo "path: '$target', args: '$*'"
+  exit
+fi
+
+parent=${target%/Postings}
+if [ ! -d "$parent" ]
+then
+  echo "ERROR: Local archive ${parent} is not mounted" >&2
+  exit 1
+fi
+if [ ! -d "$target" ]
+then
+  echo "ERROR: Postings directory ${target} is not present" >&2
+  exit 1
+fi
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    -convert )
+      # echo sarcoidosis | phrase-search -convert disz Name Code
+      # phrase-search -convert disz Name Code sarcoidosis
+      # echo D012507 | phrase-search -convert disz Code Name
+      if [ $# -lt 4 ]
+      then
+        echo "Too few arguments to -convert command" >&2
+        exit 0
+      fi
+      if [ $# -gt 5 ]
+      then
+        echo "Too many arguments to -convert command" >&2
+        exit 0
+      fi
+      if [ $# -eq 5 ]
+      then
+        if [[ ! -t 0 ]]
+        then
+          echo "Both stdin input and identifier argument to -convert" >&2
+          exit 0
+        fi
+        shift
+        tg="$1"
+        fr="$2"
+        to="$3"
+        id="$4"
+        cat "$EDIRECT_PUBMED_MASTER/Data/${tg}conv.xml" |
+        xtract -pattern Rec -if "$fr" -equals "$id" -sep "\n" -element "$to"
+        exit 0
+      fi
+      if [ $# -eq 4 ]
+      then
+        if [[ -t 0 ]]
+        then
+          echo "No stdin input to -convert" >&2
+          exit 0
+        fi
+        shift
+        tg="$1"
+        fr="$2"
+        to="$3"
+        temp=$(mktemp /tmp/CONVERT_TEMP.XXXXXXXXX)
+        cat "/dev/stdin" > $temp
+        cat "$EDIRECT_PUBMED_MASTER/Data/${tg}conv.xml" |
+        xtract -wrp Set -pattern Rec -select "$fr" -in "$temp" |
+        xtract -pattern Rec -sep "\n" -element "$to"
+        rm "$temp"
+        exit 0
+      fi
+      echo "Unrecognized -convert command" >&2
+      exit 0
+      ;;
+    -lookup )
+      # old version uses sort by record count without scores
+      # echo D012507 | phrase-search -lookdown dich t c |
+      # phrase-search -convert chem Code Name
+      # echo "sarcoidosis" | DiszNameToCode | DiszToChem | ChemCodeToName | sort -f | uniq -i
+      if [ $# -gt 2 ]
+      then
+        shift
+        tag="$1"
+        shift
+        thms=("$@")
+        while IFS=$'\t' read id
+        do
+          for thm in "${thms[@]}"
+          do
+            phrase-search -counts "$thm $tag $id * [CONV]"
+          done |
+          sort -nr | head -n 30 | tr ' ' '\t' | cut -f 5
+        done |
+        sort -f | uniq -i
+      fi
+      exit 0
+      ;;
+    -lookdown )
+      # test version uses sort by score and then record count
+      # echo D012507 | phrase-search -lookup dich t c |
+      # phrase-search -convert chem Code Name
+      # echo "sarcoidosis" | DiszNameToCode | Disz2Chem | ChemCodeToName | sort -f | uniq -i
+      if [ $# -gt 2 ]
+      then
+        shift
+        tag="$1"
+        shift
+        thms=("$@")
+        while IFS=$'\t' read id
+        do
+          for thm in "${thms[@]}"
+          do
+            phrase-search -counts "$thm $tag $id * [CONV]"
+          done |
+          tr ' ' '\t' |
+          sort -k 6,6nr -k 1,1nr |
+          awk -F '\t' -v 'OFS=\t' '$6 > 60' |
+          cut -f 5 |
+          awk '!visited[$0]++' |
+          head -n 40
+        done |
+        sort -f | uniq -i
+      fi
+      exit 0
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+group_phrases() {
+  uniq |
+  paste -sd "," - |
+  sed -e 's/^+//g' -e 's/+$//g' -e 's/,+,/+/g' -e 's/^,//g' -e 's/,$//g' -e 's/+/ /g'
+}
+
+word_pairs() {
+  while read first rest
+  do
+    if [ -z "$rest" ]
+    then
+      echo "$first"
+      continue
+    fi
+    prev=$first
+    for curr in $rest
+    do
+      echo "$prev $curr"
+      prev="$curr"
+    done
+  done
+}
+
+if [ $# -gt 0 ]
+then
+  val="$1"
+  shift
+  case "$val" in
+    -count )
+      rchive -path "$target" -db "$dbase" -count "$*" 
+      ;;
+    -counts )
+      rchive -path "$target" -db "$dbase" -counts "$*" 
+      ;;
+    -countr )
+      rchive -path "$target" -db "$dbase" -countr "$*" 
+      ;;
+    -countp )
+      rchive -path "$target" -db "$dbase" -countp "$*" 
+      ;;
+    -query | -phrase )
+      rchive -path "$target" -db "$dbase" -query "$*"
+      ;;
+    -filter )
+      case "$*" in
+        "AND "* | "OR "* | "NOT "* )
+          rchive -path "$target" -db "$dbase" -query "[PIPE] $*"
+          ;;
+        "[PIPE] "* )
+          rchive -path "$target" -db "$dbase" -query "$*"
+          ;;
+        *)
+          rchive -path "$target" -db "$dbase" -query "[PIPE] AND $*"
+          ;;
+     esac
+      ;;
+    -search )
+      rchive -path "$target" -db "$dbase" -search "$*"
+      ;;
+    -exact )
+      rchive -path "$target" -db "$dbase" -exact "$*"
+      ;;
+    -title )
+      rchive -path "$target" -db "$dbase" -title "$*"
+      ;;
+    -link | -links )
+      rchive -path "$target" -db "$dbase" -link "$*"
+      ;;
+    -words | -partial )
+      echo "$*" |
+      word-at-a-time |
+      filter-stop-words |
+      while read txt
+      do
+        rchive -path "$target" -db "$dbase" -title "$txt"
+      done |
+      sort-uniq-count-rank -n
+      ;;
+    -pairs )
+      echo "$*" |
+      word-at-a-time |
+      filter-stop-words -plus |
+      group_phrases |
+      fmt -w 1 |
+      tr ',' ' ' |
+      word_pairs |
+      while read txt
+      do
+        rchive -path "$target" -db "$dbase" -title "$txt"
+      done |
+      sort-uniq-count-rank -n
+      ;;
+    -count-words )
+      echo "$*" |
+      word-at-a-time |
+      filter-stop-words |
+      wc -l |
+      tr -d ' '
+      ;;
+    -count-pairs )
+      echo "$*" |
+      word-at-a-time |
+      filter-stop-words -plus |
+      group_phrases |
+      fmt -w 1 |
+      tr ',' ' ' |
+      word_pairs |
+      wc -l |
+      tr -d ' '
+      ;;
+    -mock )
+      rchive -path "$target" -db "$dbase" -mock "$*"
+      ;;
+    -mocks )
+      rchive -path "$target" -db "$dbase" -mocks "$*"
+      ;;
+    -mockt )
+      rchive -path "$target" -db "$dbase" -mockt "$*"
+      ;;
+    -mockx )
+      rchive -path "$target" -db "$dbase" -mockx "$*"
+      ;;
+    -mockp )
+      echo "$*" |
+      word-at-a-time |
+      filter-stop-words -plus |
+      group_phrases |
+      fmt -w 1 |
+      tr ',' ' ' |
+      word_pairs
+      ;;
+    -term | -terms | -field | -fields )
+      if [ $# -gt 0 ]
+      then
+        field=$1
+        shift
+      fi
+      if [ -z "$field" ]
+      then
+        cd "$target"
+        for dr in *
+        do
+          if [ -d "$dr" ]
+          then
+            echo "$dr"
+          fi
+        done
+      else
+        if [ "$field" = "NORM" ]
+        then
+          field="TIAB"
+        fi
+        for dr in "$target/$field"/*
+        do
+          if [ -d "$dr" ]
+          then
+            find "$dr" -name "*.$field.trm" -print0 | sort -Vz | xargs -0 cat
+          fi
+        done
+      fi
+      ;;
+    -total | -totals )
+      if [ $# -gt 0 ]
+      then
+        field=$1
+        shift
+      fi
+      if [ -z "$field" ]
+      then
+        cd "$target"
+        for dr in *
+        do
+          if [ -d "$dr" ]
+          then
+            echo "$dr"
+          fi
+        done
+      else
+        if [ "$field" = "NORM" ]
+        then
+          field="TIAB"
+        fi
+        for dr in "$target/$field"/*
+        do
+          if [ -d "$dr" ]
+          then
+            pfx=$( echo "${target}/${field}/" )
+            sfx=$( echo ".${field}.trm" )
+            find "$dr" -name "*.$field.trm" | sort -V |
+            sed -e "s|${pfx}||g" -e "s|${sfx}||g" |
+            while read idnt
+            do
+              dir="${idnt%/*}/"
+              key=$( basename "$idnt" )
+              rchive -path "$target" -db "$dbase" -totals "$dir" "$key" "$field"
+            done
+          fi
+        done
+      fi
+      ;;
+    -* )
+      exec >&2
+      echo "ERROR: Unrecognized option $val" >&2
+      exit 1
+      ;;
+    * )
+      exec >&2
+      echo "ERROR: Unrecognized argument $val" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+
+# default to -query
+rchive -path "$target" -db "$dbase" -query "$*"
+exit 0

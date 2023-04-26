@@ -1,0 +1,400 @@
+#!/bin/bash
+
+# Public domain notice for all NCBI EDirect scripts is located at:
+# https://www.ncbi.nlm.nih.gov/books/NBK179288/#chapter6.Public_Domain_Notice
+
+total_start=$(date "+%s")
+
+e2index=false
+e2invert=false
+fullIndex=false
+internal=false
+clean=false
+scrub=false
+useFtp=true
+useHttps=false
+# for development
+zap=false
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    daily | -daily )
+      e2index=true
+      e2invert=true
+      shift
+      ;;
+    index | -index | reindex | -reindex )
+      e2index=true
+      e2invert=true
+      fullIndex=true
+      shift
+      ;;
+    clean | -clean | clear | -clear )
+      # delete Indices contents and Increment files
+      clean=true
+      shift
+      ;;
+    scrub | -scrub )
+      clean=true
+      # and delete Postings directories
+      scrub=true
+      shift
+      ;;
+    zap | -zap )
+      zap=true
+      shift
+      ;;
+    -internal | -int )
+      # populate from files on internal network
+      internal=true
+      shift
+      ;;
+    -ftp )
+      useFtp=true
+      useHttps=false
+      shift
+      ;;
+    -http | -https )
+      useFtp=false
+      useHttps=true
+      shift
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    -path )
+      shift
+      ;;
+    -* )
+      exec >&2
+      echo "$0: Unrecognized option $1"
+      exit 1
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+if [ "$#" -gt 0 ]
+then
+  target="$1"
+  if [ ! -d "$target" ]
+  then
+    echo "Unable to find '$target' path"
+    exit 1
+  fi
+  MASTER=$(cd "$target" && pwd)
+  CONFIG=${MASTER}
+  shift
+else
+  if [ -z "${EDIRECT_TAXONOMY_MASTER}" ]
+  then
+    echo "Must supply path to master archive area or set EDIRECT_TAXONOMY_MASTER environment variable"
+    exit 1
+  else
+    MASTER="${EDIRECT_TAXONOMY_MASTER}"
+    MASTER=${MASTER%/}
+    if [ ! -d "${MASTER}" ]
+    then
+      echo "Unable to find '$MASTER' path"
+      exit 1
+    fi
+  fi
+fi
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    -temp | -work | -working )
+      shift
+      ;;
+    -* )
+      exec >&2
+      echo "$0: Unrecognized option $1"
+      exit 1
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+if [ "$#" -gt 0 ]
+then
+  working="$1"
+  if [ ! -d "$working" ]
+  then
+    echo "Unable to find '$working' path"
+    exit 1
+  fi
+  WORKING=$(cd "$working" && pwd)
+  shift
+else
+  if [ -z "${EDIRECT_TAXONOMY_WORKING}" ]
+  then
+    WORKING=${MASTER}
+  else
+    WORKING="${EDIRECT_TAXONOMY_WORKING}"
+    WORKING=${WORKING%/}
+  fi
+  if [ ! -d "${WORKING}" ]
+  then
+    echo "Unable to find '$WORKING' path"
+    exit 1
+  fi
+fi
+
+echo "MASTER $MASTER"
+
+echo "WORKING $WORKING"
+
+for dir in Archive Data Postings
+do
+  mkdir -p "$MASTER/$dir"
+done
+
+if [ -d "$MASTER/Sentinels" ]
+then
+  mv "$MASTER/Sentinels" "$MASTER/Archive"
+else
+  mkdir -p "$MASTER/Archive/Sentinels"
+fi
+
+for dir in Extras Index Invert Merged Source
+do
+  mkdir -p "$WORKING/$dir"
+done
+
+pm-prepare "$MASTER" "$WORKING"
+
+date
+
+RemoveAllSubfolders() {
+
+  for fl in *
+  do
+    if [ -d "$fl" ]
+    then
+      echo "$fl"
+      rm -- -rf "${fl}" &
+    fi
+  done
+}
+
+if [ "$zap" = true ]
+then
+  echo "Clearing Indices"
+  cd "$WORKING/Index"
+  RemoveAllSubfolders
+  cd "$WORKING/Invert"
+  rm -rf *
+  cd "$WORKING/Merged"
+  rm -rf *
+  echo "Clearing Postings"
+  cd "$MASTER/Postings"
+  RemoveAllSubfolders
+  echo "Clearing Archive"
+  cd "$MASTER/Archive"
+  rm -rf Sentinels
+  RemoveAllSubfolders
+  cd "$MASTER/Postings"
+  RemoveAllSubfolders
+
+  wait
+
+  exit 0
+fi
+
+DWN=0
+DEL=0
+SCB=0
+POP=0
+IDX=0
+INV=0
+MRG=0
+PST=0
+
+seconds_start=$(date "+%s")
+cd "$WORKING/Source"
+if [ "$internal" = true ]
+then
+  echo "Will Use Direct Access To Taxonomy Files On FTP Site"
+else
+  echo "Downloading Taxonomy Files"
+  if [ ! -f "new_taxdump.tar.gz" ]
+  then
+    if [ "$useFtp" = true ]
+    then
+      nquire -asp ftp.ncbi.nlm.nih.gov "pub/taxonomy/new_taxdump" "new_taxdump.tar.gz"
+    elif [ "$useHttps" = true ]
+    then
+      nquire -get https://ftp.ncbi.nlm.nih.gov pub/taxonomy/new_taxdump new_taxdump.tar.gz > new_taxdump.tar.gz
+    fi
+  fi
+fi
+# expand components
+if [ -f "new_taxdump.tar.gz" ]
+then
+  tar -tvf new_taxdump.tar.gz |
+  tr -s ' ' '\t' | cut -f 9 |
+  skip-if-file-exists |
+  while read fl
+  do
+    tar -zxf new_taxdump.tar.gz "$fl"
+  done
+fi
+# integrate into taxnodes source file
+rm -f taxnodes.xml
+rchive -taxon "$WORKING/Source" > taxnodes.xml
+if [ ! -f "$MASTER/Data/taxnodes.xml" ] && [ -f "$WORKING/Source/taxnodes.xml" ]
+then
+  cp "$WORKING/Source/taxnodes.xml" "$MASTER/Data/taxnodes.xml"
+fi
+seconds_end=$(date "+%s")
+seconds=$((seconds_end - seconds_start))
+DWN=$seconds
+echo "$DWN seconds"
+sleep 1
+
+seconds_start=$(date "+%s")
+echo "Populating Taxonomy Archive"
+cd "$WORKING/Source"
+cat taxnodes.xml |
+rchive -gzip -db taxonomy \
+  -archive "$MASTER/Archive" "$WORKING/Index" "$WORKING/Invert" \
+  -index TaxID -pattern TaxNode
+seconds_end=$(date "+%s")
+seconds=$((seconds_end - seconds_start))
+POP=$seconds
+echo "$POP seconds"
+echo ""
+sleep 1
+
+if [ "$e2index" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Incremental Indexing"
+  rchive -db taxonomy -e2incIndex "$MASTER/Archive" "$WORKING/Index" -e2index
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  IDX=$seconds
+  echo "IDX $IDX seconds"
+  echo ""
+  sleep 1
+fi
+
+if [ "$e2invert" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Incremental Inversion"
+  rchive -db taxonomy -e2incInvert "$WORKING/Index" "$WORKING/Invert"
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  INV=$seconds
+  echo "INV $INV seconds"
+  echo ""
+  sleep 1
+fi
+
+if [ "$fullIndex" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Merging Inverted Indices"
+  cd "$WORKING/Invert"
+  rchive -gzip -merge "$WORKING/Merged" *.inv.gz
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  MRG=$seconds
+  echo "MRG $MRG seconds"
+  echo ""
+  sleep 1
+  # taxonomy only goes to zyzzyzus warreni
+  if [ ! -f "$WORKING/Merged/zy.mrg.gz" ]
+  then
+    echo "ERROR: Merge failed to complete - missing zy.mrg.gz file"
+    echo ""
+    echo "EXITING DUE TO BUILD FAILURE"
+    echo ""
+    fullIndex=false
+  fi
+fi
+
+if [ "$fullIndex" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Producing Postings Files"
+  cd "$WORKING/Merged"
+  term=$( echo "UID SCIN COMN TXSY TXDV LNGE GC MGC PGC HGC" )
+  for fl in *.mrg.gz
+  do
+    echo "$fl"
+  done |
+  sort |
+  xargs -n 100 echo |
+  while read files
+  do
+    rchive -promote "$MASTER/Postings" "$term" $files
+  done
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  PST=$seconds
+  echo "PST $PST seconds"
+  echo ""
+  sleep 1
+fi
+
+echo "ARCHIVE-TAXONOMY"
+
+echo ""
+
+echo "DWN $DWN seconds"
+echo "POP $POP seconds"
+
+if [ "$e2index" = true ]
+then
+  echo "IDX $IDX seconds"
+fi
+if [ "$e2invert" = true ]
+then
+  echo "INV $INV seconds"
+fi
+if [ "$fullIndex" = true ]
+then
+  echo "MRG $MRG seconds"
+  echo "PST $PST seconds"
+fi
+
+echo ""
+
+total_end=$(date "+%s")
+total=$((total_end - total_start))
+TOT=$total
+echo "TOT $TOT seconds"
+echo ""
+
+date
+
+if [ -n "$CONFIG" ]
+then
+  target=bash_profile
+  if ! grep "$target" "$HOME/.bashrc" >/dev/null 2>&1
+  then
+    if [ ! -f $HOME/.$target ] || grep 'bashrc' "$HOME/.$target" >/dev/null 2>&1
+    then
+      target=bashrc
+    fi
+  fi
+  echo ""
+  echo "For convenience, please execute the following to save the archive path to a variable:"
+  echo ""
+  echo "  echo \"export EDIRECT_TAXONOMY_MASTER='${CONFIG}'\" >>" "\$HOME/.$target"
+  echo ""
+fi

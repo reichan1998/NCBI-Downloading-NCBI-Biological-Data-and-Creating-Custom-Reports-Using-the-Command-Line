@@ -1,0 +1,231 @@
+#!/bin/sh
+
+# Public domain notice for all NCBI EDirect scripts is located at:
+# https://www.ncbi.nlm.nih.gov/books/NBK179288/#chapter6.Public_Domain_Notice
+
+if [ "$#" -lt 2 ]
+then
+  echo "Must supply paths to master and working directories"
+  exit 1
+fi
+
+master="$1"
+working="$2"
+
+osname=$( uname -s | sed -e 's/_NT-.*$/_NT/; s/^MINGW[0-9]*/CYGWIN/' )
+
+if [ "$osname" = "CYGWIN_NT" -a -x /bin/cygpath ]
+then
+  master=$( cygpath -w "$master" )
+  working=$( cygpath -w "$working" )
+fi
+
+MASTER=${master%/}
+WORKING=${working%/}
+
+WriteCacheDirTag() {
+
+  path="$1"
+
+  if [ ! -f "$path/CACHEDIR.TAG" ]
+  then
+  cat >$path/CACHEDIR.TAG <<EOF
+Signature: 8a477f597d28d172789f06886806bc55
+# This file is a cache directory tag created by edirect.
+# For information about cache directory tags, see:
+#   http://www.brynosaurus.com/cachedir/
+EOF
+  fi
+}
+
+verbose=false
+
+if [ ! -f "$MASTER/Archive/CACHEDIR.TAG" ]
+then
+  WriteCacheDirTag "$MASTER/Archive"
+  verbose=true
+fi
+
+if [ ! -f "$MASTER/Postings/CACHEDIR.TAG" ]
+then
+  WriteCacheDirTag "$MASTER/Postings"
+  verbose=true
+fi
+
+if [ -d "$WORKING/Source" ] && [ ! -f "$WORKING/Source/CACHEDIR.TAG" ]
+then
+  WriteCacheDirTag "$WORKING/Source"
+  verbose=true
+fi
+
+if [ ! -f "$WORKING/Index/CACHEDIR.TAG" ]
+then
+  WriteCacheDirTag "$WORKING/Index"
+  verbose=true
+fi
+
+if [ ! -f "$WORKING/Invert/CACHEDIR.TAG" ]
+then
+  WriteCacheDirTag "$WORKING/Invert"
+  verbose=true
+fi
+
+if [ ! -f "$WORKING/Merged/CACHEDIR.TAG" ]
+then
+  WriteCacheDirTag "$WORKING/Merged"
+  verbose=true
+fi
+
+if [ "$verbose" = false ]
+then
+  exit 0
+fi
+
+# just the drive, without any /pubmed, /pmc, or other database-specific subfolder
+minor=$(df "$MASTER" | awk '($NF ~ /^\//) { print $NF }')
+
+HardDriveWarning() {
+
+  path="$1"
+
+  echo ""
+  echo "$path IS ON A HARD DISK DRIVE, NOT THE EXPECTED SOLID-STATE DRIVE."
+  echo ""
+  echo "WOULD YOU LIKE TO PROCEED WITH ARCHIVING EVEN THOUGH IT IS NOT RECOMMENDED? [y/N]"
+  read response
+  case "$response" in
+    [Yy]*      ) echo "OK, PROCEEDING." ;;
+    [Nn]* | '' ) echo "Holding off, then."; exit 1 ;;
+    *          ) echo "Conservatively taking that as a no."; exit 1 ;;
+  esac
+}
+
+NonAPFSWarning() {
+
+  path="$1"
+  ftyp="$2"
+
+  echo ""
+  echo "$path IS OF TYPE '$ftyp'"
+  echo ""
+  echo "IT NEEDS TO BE REFORMATTED AS APFS BEFORE YOU CAN PROCEED:"
+  echo ""
+  echo "  Run Utilities -> Disk Utility"
+  echo ""
+  echo "  Switch the View option to 'Show All Devices'."
+  echo ""
+  echo "  Select the entry named 'PCIe SSD Media' (not the two entries indented below it)."
+  echo ""
+  echo "  Click on 'Erase'."
+  echo ""
+  echo "  Change the Scheme to 'GUID Partition Map' (which will expand the Format choices)."
+  echo ""
+  echo "  Set the Format to 'APFS'."
+  echo ""
+  echo "  Press Erase."
+  echo ""
+  echo "ALSO RUN:"
+  echo ""
+  echo "  sudo trimforce enable"
+  echo ""
+  echo "IF NECESSARY TO ENABLE TRIM SUPPORT ON THE SOLID STATE DRIVE."
+  echo ""
+  echo "WOULD YOU LIKE TO PROCEED WITH ARCHIVING ON THE NON-APFS VOLUME ANYWAY? [y/N]"
+  read response
+  case "$response" in
+    [Yy]*      ) echo "OK, PROCEEDING." ;;
+    [Nn]* | '' ) echo "Holding off, then."; exit 1 ;;
+    *          ) echo "Conservatively taking that as a no."; exit 1 ;;
+  esac
+  echo ""
+}
+
+if [ "$osname" = "Darwin" ]
+then
+  MASTER_ROOT=$(df $MASTER | awk 'END { print $NF }')
+  sdst=$(diskutil info -plist $MASTER_ROOT | plutil -extract SolidState xml1 - -o - |  sed -ne 's,<,,pg' | sed -ne 's,/>,,pg')
+  if [ "$sdst" != "true" ]
+  then
+    HardDriveWarning "$MASTER"
+  fi
+  ftyp=$(diskutil info -plist $MASTER_ROOT | plutil -extract FilesystemType xml1 - -o - | sed -ne 's,</*string>,,pg')
+  if [ "$ftyp" != "apfs" ]
+  then
+    NonAPFSWarning "$MASTER" "$ftyp"
+  fi
+
+  echo ""
+  echo "  To prepare the disk for an EDirect archive, please disable:"
+  echo ""
+  echo "    Antivirus scanning"
+  echo "    Spotlight indexing"
+  echo "    Time Machine backups"
+  echo ""
+  echo "  for the '$master' directory:"
+  echo ""
+  echo "    sudo mdutil -i off ${master}"
+  echo "    sudo mdutil -E ${master}"
+  echo "    sudo touch ${master}/.fseventsd/no_log"
+  echo ""
+fi
+
+if [ "$osname" = "Linux" ]
+then
+  dev=$( df . | awk '/^\/dev\// { print $1 }' )
+  if [ -z "$dev" ]
+  then
+    echo "Unable to confirm remote file system's underlying storage type"
+    echo ""
+    echo "WOULD YOU LIKE TO PROCEED WITH ARCHIVING ON THIS UNKNOWN STORAGE TYPE? [y/N]"
+    read response
+    case "$response" in
+      [Yy]*      ) echo "OK, PROCEEDING." ;;
+      [Nn]* | '' ) echo "Holding off, then."; exit 1 ;;
+      *          ) echo "Conservatively taking that as a no."; exit 1 ;;
+    esac
+    echo ""
+  else
+    basedev=$( realpath "$dev" | sed -e 's,/dev/,,; s/\([a-z]\)[0-9]*$/\1/' )
+    isHDD=$( grep 1 /sys/block/$basedev/queue/rotational )
+    if [ -n "$isHDD" ]
+    then
+      HardDriveWarning "$MASTER"
+    fi
+  fi
+
+  echo ""
+  echo "  To prepare the disk for an EDirect archive, please disable:"
+  echo ""
+  echo "    Antivirus scanning"
+  echo ""
+  echo "  for the '$master' directory."
+  echo ""
+  echo "  You may also need to run a command like:"
+  echo ""
+  echo "    sudo mkfs -t ext4 -b 1024 -I 128 -i 4096 /dev/<device-name>"
+  echo ""
+  echo "  to configure the file system for a large number of inodes."
+  echo ""
+fi
+
+if [ "$osname" = "CYGWIN_NT" ]
+then
+  echo ""
+  echo "  To prepare the disk for an EDirect archive, please disable:"
+  echo ""
+  echo "    Antivirus scanning"
+  echo ""
+  echo "  for the '$master' directory."
+  echo ""
+
+  if reg query 'HKLM\System\CurrentControlSet\Control\FileSystem' \
+    /v NtfsDisable8dot3NameCreation | fgrep -q 0x0
+  then
+    echo "  Also ask your administrator to set:"
+    echo ""
+    echo "    NtfsDisable8dot3NameCreation"
+    echo ""
+    echo "  in the Windows Registry."
+    echo ""
+  fi
+fi

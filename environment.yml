@@ -1,0 +1,13 @@
+name: CommandLine_CustomData_April2023
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python
+  - numpy
+  - pip
+  - entrez-direct
+  - ncbi-datasets-cli
+  - pip:
+    - bash_kernel

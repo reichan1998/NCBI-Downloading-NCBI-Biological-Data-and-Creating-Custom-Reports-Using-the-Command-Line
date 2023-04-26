@@ -1,0 +1,45 @@
+#!/bin/sh
+
+# Public domain notice for all NCBI EDirect scripts is located at:
+# https://www.ncbi.nlm.nih.gov/books/NBK179288/#chapter6.Public_Domain_Notice
+
+DownloadOne() {
+
+  fl="$1"
+
+  echo "$fl" |
+  nquire -asp ftp.ncbi.nlm.nih.gov pub/wilbur/BioC-PMC
+
+  # delete if file is present but empty
+  if [ -f "$fl" ] && [ ! -s "$fl" ]
+  then
+    rm -f "$fl"
+  fi
+
+  # retry if no file
+  if [ ! -f "$fl" ]
+  then
+    sleep 10
+    echo "First Failed Download Retry" >&2
+    echo "$fl" |
+    nquire -asp ftp.ncbi.nlm.nih.gov pub/wilbur/BioC-PMC
+  fi
+
+  # retry again if still no file
+  if [ ! -f "$fl" ]
+  then
+    sleep 10
+    echo "Second Failed Download Retry" >&2
+    echo "$fl" |
+    nquire -asp ftp.ncbi.nlm.nih.gov pub/wilbur/BioC-PMC
+  fi
+}
+
+nquire -lst ftp.ncbi.nlm.nih.gov pub/wilbur/BioC-PMC |
+grep xml_ascii.tar.gz |
+skip-if-file-exists |
+while read fl
+do
+  echo "$fl"
+  DownloadOne "$fl"
+done

@@ -1,0 +1,444 @@
+#!/bin/bash
+
+# Public domain notice for all NCBI EDirect scripts is located at:
+# https://www.ncbi.nlm.nih.gov/books/NBK179288/#chapter6.Public_Domain_Notice
+
+total_start=$(date "+%s")
+
+e2index=false
+e2invert=false
+fullIndex=false
+internal=false
+clean=false
+scrub=false
+# for development
+zap=false
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    daily | -daily )
+      e2index=true
+      e2invert=true
+      shift
+      ;;
+    index | -index | reindex | -reindex )
+      e2index=true
+      e2invert=true
+      fullIndex=true
+      shift
+      ;;
+    clean | -clean | clear | -clear )
+      # delete Indices contents and Increment files
+      clean=true
+      shift
+      ;;
+    scrub | -scrub )
+      clean=true
+      # and delete Postings directories
+      scrub=true
+      shift
+      ;;
+    zap | -zap )
+      zap=true
+      shift
+      ;;
+    -internal | -int )
+      # populate from files on internal network
+      internal=true
+      shift
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    -path )
+      shift
+      ;;
+    -* )
+      exec >&2
+      echo "$0: Unrecognized option $1"
+      exit 1
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+if [ "$#" -gt 0 ]
+then
+  target="$1"
+  if [ ! -d "$target" ]
+  then
+    echo "Unable to find '$target' path"
+    exit 1
+  fi
+  MASTER=$(cd "$target" && pwd)
+  CONFIG=${MASTER}
+  shift
+else
+  if [ -z "${EDIRECT_PMC_MASTER}" ]
+  then
+    echo "Must supply path to master archive area or set EDIRECT_PMC_MASTER environment variable"
+    exit 1
+  else
+    MASTER="${EDIRECT_PMC_MASTER}"
+    MASTER=${MASTER%/}
+    if [ ! -d "${MASTER}" ]
+    then
+      echo "Unable to find '$MASTER' path"
+      exit 1
+    fi
+  fi
+fi
+
+while [ $# -gt 0 ]
+do
+  case "$1" in
+    -temp | -work | -working )
+      shift
+      ;;
+    -* )
+      exec >&2
+      echo "$0: Unrecognized option $1"
+      exit 1
+      ;;
+    * )
+      break
+      ;;
+  esac
+done
+
+if [ "$#" -gt 0 ]
+then
+  working="$1"
+  if [ ! -d "$working" ]
+  then
+    echo "Unable to find '$working' path"
+    exit 1
+  fi
+  WORKING=$(cd "$working" && pwd)
+  shift
+else
+  if [ -z "${EDIRECT_PMC_WORKING}" ]
+  then
+    WORKING=${MASTER}
+  else
+    WORKING="${EDIRECT_PMC_WORKING}"
+    WORKING=${WORKING%/}
+  fi
+  if [ ! -d "${WORKING}" ]
+  then
+    echo "Unable to find '$WORKING' path"
+    exit 1
+  fi
+fi
+
+echo "MASTER $MASTER"
+
+echo "WORKING $WORKING"
+
+for dir in Archive Data Postings
+do
+  mkdir -p "$MASTER/$dir"
+done
+
+if [ -d "$MASTER/Sentinels" ]
+then
+  mv "$MASTER/Sentinels" "$MASTER/Archive"
+else
+  mkdir -p "$MASTER/Archive/Sentinels"
+fi
+
+if [ -d "$WORKING/PMC" ]
+then
+  mv "$WORKING/PMC" "$WORKING/Source"
+else
+  mkdir -p "$WORKING/Source"
+fi
+
+for dir in Extras Index Invert Merged
+do
+  mkdir -p "$WORKING/$dir"
+done
+
+pm-prepare "$MASTER" "$WORKING"
+
+date
+
+RemoveAllSubfolders() {
+
+  for fl in *
+  do
+    if [ -d "$fl" ]
+    then
+      echo "$fl"
+      rm -- -rf "${fl}" &
+    fi
+  done
+}
+
+if [ "$zap" = true ]
+then
+  echo "Clearing Indices"
+  cd "$WORKING/Index"
+  RemoveAllSubfolders
+  cd "$WORKING/Invert"
+  rm -rf *
+  cd "$WORKING/Merged"
+  rm -rf *
+  echo "Clearing Postings"
+  cd "$MASTER/Postings"
+  RemoveAllSubfolders
+  echo "Clearing Archive"
+  cd "$MASTER/Archive"
+  rm -rf Sentinels
+  RemoveAllSubfolders
+  cd "$MASTER/Postings"
+  RemoveAllSubfolders
+
+  wait
+
+  exit 0
+fi
+
+DWN=0
+DEL=0
+SCB=0
+POP=0
+IDX=0
+INV=0
+MRG=0
+PST=0
+
+seconds_start=$(date "+%s")
+cd "$WORKING/Source"
+if [ "$internal" = true ]
+then
+  echo "Will Use Direct Access To PMC Files On FTP Site"
+else
+  echo "Downloading PMC Files"
+  download-pmc
+fi
+seconds_end=$(date "+%s")
+seconds=$((seconds_end - seconds_start))
+DWN=$seconds
+echo "$DWN seconds"
+sleep 1
+
+PMCStash() {
+
+  fl="$1"
+
+  base=${fl%.tar.gz}
+  echo "$base"
+
+  tar -xOzf "$fl" --to-stdout |
+  xtract -rec PMCExtract -pattern document -UID id -wrp UID -element "&UID" \
+    -division passage -TEXT passage/text -TYPE "()" -SECT "()" \
+      -group infon -if "@key" -equals type -TYPE passage/infon \
+      -group infon -if "@key" -equals section_type -SECT passage/infon \
+      -group passage \
+        -if "&SECT" -equals TITLE \
+        -or "&TYPE" -equals abstract \
+        -or "&TYPE" -equals paragraph \
+          -branch passage \
+            -if "&SECT" -is-not ABBR \
+            -and "&SECT" -is-not ACK_FUND \
+            -and "&SECT" -is-not APPENDIX \
+            -and "&SECT" -is-not AUTH_CONT \
+            -and "&SECT" -is-not COMP_INT \
+            -and "&SECT" -is-not FIG \
+            -and "&SECT" -is-not REF \
+            -and "&SECT" -is-not REVIEW_INFO \
+            -and "&SECT" -is-not SUPPL \
+            -and "&SECT" -is-not TABLE \
+              -block passage -if "&TYPE" -equals front \
+                -section passage -pkg Cit \
+                  -subset passage -wrp UID -element "&UID" \
+                  -subset infon -if "@key" -equals "article-id_doi" -wrp DOI -element infon \
+                  -subset infon -if "@key" -equals "article-id_pmc" -wrp PMCID -element infon \
+                  -subset infon -if "@key" -equals "article-id_pmid" -wrp PMID -element infon \
+                  -subset infon -if "@key" -equals "article-id_publisher-id" -wrp PUBID -element infon \
+                  -subset infon -if "@key" -equals "elocation-id" -wrp ELOCID -element infon \
+                  -subset infon -if "@key" -equals "source" -wrp SRC -element infon \
+                  -subset infon -if "@key" -equals "journal" -wrp JOUR -element "infon[|;]" \
+                  -subset infon -if "@key" -equals "volume" -wrp VOL -element infon \
+                  -subset infon -if "@key" -equals "issue" -wrp ISS -element infon \
+                  -subset infon -if "@key" -equals "year" -wrp YEAR -year infon \
+                  -subset infon -if "@key" -starts-with "name_" -GIVN "infon[;given-names:|]" \
+                    -unit infon -enc Auth \
+                      -wrp Order -element "@key[name_|]" \
+                      -wrp LastName -element "infon[surname:|;given-names]" \
+                      -wrp Given -element "infon[;given-names:|]" \
+                      -wrp Initials -initials "&GIVN" \
+              -block passage -if "&TEXT" -is-not "" \
+                -section passage -enc "&SECT" \
+                  -tag TEXT -atr type "&SECT" -cls -encode "&TEXT" -end TEXT -rst -clr |
+  transmute -pattern PMCExtract -format |
+  rchive -gzip -db pmc \
+    -archive "$MASTER/Archive" "$WORKING/Index" "$WORKING/Invert" \
+    -index UID -pattern PMCExtract
+
+  touch "$MASTER/Archive/Sentinels/$base.snt"
+}
+
+seconds_start=$(date "+%s")
+echo "Populating PMC Archive"
+cd "$WORKING/Source"
+for fl in *.tar.gz
+do
+  base=${fl%.tar.gz}
+  if [ -f "$MASTER/Archive/Sentinels/$base.snt" ]
+  then
+    continue
+  fi
+  PMCStash "$fl"
+done
+seconds_end=$(date "+%s")
+seconds=$((seconds_end - seconds_start))
+POP=$seconds
+echo "$POP seconds"
+sleep 1
+
+echo ""
+
+if [ "$e2index" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Incremental Indexing"
+  rchive -db pmc -e2incIndex "$MASTER/Archive" "$WORKING/Index" -e2index
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  IDX=$seconds
+  echo "IDX $IDX seconds"
+  echo ""
+  sleep 1
+fi
+
+if [ "$e2invert" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Incremental Inversion"
+  rchive -db pmc -e2incInvert "$WORKING/Index" "$WORKING/Invert"
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  INV=$seconds
+  echo "INV $INV seconds"
+  echo ""
+  sleep 1
+fi
+
+if [ "$fullIndex" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Merging Inverted Indices"
+  cd "$WORKING/Invert"
+  rchive -gzip -merge "$WORKING/Merged" *.inv.gz
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  MRG=$seconds
+  echo "MRG $MRG seconds"
+  echo ""
+  sleep 1
+  if [ ! -f "$WORKING/Merged/zz.mrg.gz" ]
+  then
+    echo "ERROR: Merge failed to complete - missing zz.mrg.gz file"
+    echo ""
+    echo "EXITING DUE TO BUILD FAILURE"
+    echo ""
+    fullIndex=false
+  fi
+fi
+
+if [ "$fullIndex" = true ]
+then
+  seconds_start=$(date "+%s")
+  echo "Producing Postings Files"
+  cd "$WORKING/Merged"
+  term=$( echo "UID YEAR JOUR AUTH TITL ABST TEXT" )
+  for fl in *.mrg.gz
+  do
+    echo "$fl"
+  done |
+  sort |
+  xargs -n 100 echo |
+  while read files
+  do
+    rchive -promote "$MASTER/Postings" "$term" $files
+  done
+  seconds_end=$(date "+%s")
+  seconds=$((seconds_end - seconds_start))
+  PST=$seconds
+  echo "PST $PST seconds"
+  echo ""
+  sleep 1
+fi
+
+echo "ARCHIVE-PMC"
+
+echo ""
+
+echo "DWN $DWN seconds"
+echo "POP $POP seconds"
+
+if [ "$e2index" = true ]
+then
+  echo "IDX $IDX seconds"
+fi
+if [ "$e2invert" = true ]
+then
+  echo "INV $INV seconds"
+fi
+if [ "$fullIndex" = true ]
+then
+  echo "MRG $MRG seconds"
+  echo "PST $PST seconds"
+fi
+
+echo ""
+
+total_end=$(date "+%s")
+total=$((total_end - total_start))
+TOT=$total
+echo "TOT $TOT seconds"
+echo ""
+
+date
+
+IndexJournal() {
+
+  # code to separately extract and index journal from PMC XML format
+  tar -xOzf oa_comm_xml.PMC002xxxxxx.baseline.2022-12-18.tar.gz --to-stdout |
+  xtract -mixed -set "IdxDocumentSet" -rec "IdxDocument" \
+    -pattern article -UID "()" -JTA "()" \
+      -division article-meta -block article-id \
+        -if "@pub-id-type" -equals pmc -UID "article-id[PMC|]" \
+      -division journal-meta -JTA journal-title \
+      -division article -wrp "IdxUid" -element "&UID" -clr -rst -tab "" \
+        -group "article" -pkg "IdxSearchFields" -wrp "JOUR" -jour "&JTA" |
+  transmute -format
+}
+
+if [ -n "$CONFIG" ]
+then
+  target=bash_profile
+  if ! grep "$target" "$HOME/.bashrc" >/dev/null 2>&1
+  then
+    if [ ! -f $HOME/.$target ] || grep 'bashrc' "$HOME/.$target" >/dev/null 2>&1
+    then
+      target=bashrc
+    fi
+  fi
+  echo ""
+  echo "For convenience, please execute the following to save the archive path to a variable:"
+  echo ""
+  echo "  echo \"export EDIRECT_PMC_MASTER='${CONFIG}'\" >>" "\$HOME/.$target"
+  echo ""
+fi
